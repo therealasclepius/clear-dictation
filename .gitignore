@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+dist/
+*.gguf
+*.part
+*.sqlite3
+*.log
+*.sqlite3-*
+*.key
+.env
+.env.*

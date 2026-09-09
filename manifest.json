@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "kosta.clear-dictation",
+  "name": "Clear Dictation",
+  "version": "0.1.2",
+  "author": "Clear Dictation contributors",
+  "license": "MIT",
+  "description": "Local AI dictation cleanup, personal vocabulary, and transcript recovery. Requires the companion Clear Dictation app and Voxtype.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "omarchy/BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Clear Dictation",
+    "description": "Open dictation history and writing modes. Right-click to toggle recording.",
+    "category": "Audio",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
