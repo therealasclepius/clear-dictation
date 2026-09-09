@@ -1,4 +1,4 @@
-# Version 0.1.2 alpha candidate validation
+# Version 0.1.2 alpha validation
 
 - 19 automated tests cover history recovery/retention/permissions, dictionary matching, literal mode, failure fallback, local-only routing, response validation, install/update/uninstall behavior, persistent backend selection, and startup cache priming without history.
 - Real Qwen3 cleanup resolved a corrected meeting day, removed an abandoned introduction after “scratch all this,” removed filler, preserved a negative commitment, and retained a question as a question.
@@ -22,6 +22,6 @@ After installation, systemd confirmed successful startup cache priming. The inst
 ## Public alpha review
 
 - Added installer checks for download/extraction disk space, atomic config writes, and refusal to overwrite or remove customized managed hooks. Regression tests cover low space, failed file replacement, and edited hooks during update/uninstall.
-- Added GitHub Actions for Python 3.12, 3.13, and 3.14. The workflow has not run on GitHub yet; the local suite passed on Python 3.14.7. These tests mock external service operations and do not establish real desktop compatibility.
+- Added GitHub Actions for Python 3.12, 3.13, and 3.14. All three jobs passed on [GitHub Actions](https://github.com/therealasclepius/clear-dictation/actions/runs/34331246560); the local suite also passed on Python 3.14.7. These tests mock external service operations and do not establish real desktop compatibility.
 - Source and archive reviewed for user-specific paths and accidental transcript/model/token inclusion. Distribution contains source only.
 - Still needed before a stable release: a fresh install/update/uninstall on another Omarchy machine, broader microphone/application and CPU/GPU testing, and failure recovery across partially completed installations.
