@@ -2,6 +2,7 @@
 """User-local installer. Never modifies packaged Omarchy files."""
 import argparse
 import datetime
+import fcntl
 import hashlib
 import json
 import os
@@ -10,6 +11,7 @@ import re
 import secrets
 import shlex
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -27,22 +29,75 @@ HOOK_BEGIN = "# BEGIN CLEAR DICTATION"
 HOOK_END = "# END CLEAR DICTATION"
 
 
+def checked_download_file(fd, directory, name):
+    """Check the opened inode, never trust metadata from a followed pathname."""
+    info = os.fstat(fd)
+    entry = os.stat(name, dir_fd=directory, follow_symlinks=False)
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+            or info.st_nlink != 1 or info.st_mode & 0o022
+            or (info.st_dev, info.st_ino) != (entry.st_dev, entry.st_ino)):
+        raise RuntimeError(f"Unsafe download file: {name}")
+    return info
+
+
 def download(url, target, digest, size):
     target.parent.mkdir(parents=True, exist_ok=True)
-    if target.exists():
-        with target.open("rb") as src:
-            if hashlib.file_digest(src, "sha256").hexdigest() == digest:
-                return
-        raise RuntimeError(f"Existing file has an unexpected checksum: {target}")
-    part = target.with_name(target.name + ".part")
-    remaining = max(0, size - (part.stat().st_size if part.exists() else 0))
-    if shutil.disk_usage(target.parent).free < remaining + 64 * 1024 * 1024:
-        raise RuntimeError(f"Not enough disk space to download {target.name}; need at least {remaining / 1024**3:.2f} GiB plus 64 MiB free. Partial downloads are kept for resuming.")
-    subprocess.run(["curl", "--fail", "--location", "--retry", "2", "--continue-at", "-", "--output", str(part), url], check=True)
-    with part.open("rb") as src:
-        if hashlib.file_digest(src, "sha256").hexdigest() != digest:
-            raise RuntimeError(f"Checksum mismatch: {part}")
-    part.rename(target)
+    parent = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        try:
+            existing = os.open(target.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        except FileNotFoundError:
+            pass
+        else:
+            with os.fdopen(existing, "rb") as src:
+                checked_download_file(src.fileno(), parent, target.name)
+                if hashlib.file_digest(src, "sha256").hexdigest() == digest:
+                    return
+            raise RuntimeError(f"Existing file has an unexpected checksum: {target}")
+
+        # Ignore legacy adjacent .part files: their provenance is unknown.
+        private_name = ".clear-dictation-downloads"
+        try:
+            os.mkdir(private_name, 0o700, dir_fd=parent)
+        except FileExistsError:
+            pass
+        directory = os.open(private_name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+        try:
+            info = os.fstat(directory)
+            if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+                raise RuntimeError("Download directory must be owned by the current user with mode 0700")
+            name = target.name + ".part"
+            flags = os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK
+            try:
+                fd = os.open(name, flags | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=directory)
+            except FileExistsError:
+                fd = os.open(name, flags, dir_fd=directory)
+            with os.fdopen(fd, "r+b") as part:
+                # Serialize concurrent installers before inspecting or resuming.
+                fcntl.flock(part.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                info = checked_download_file(part.fileno(), directory, name)
+                if stat.S_IMODE(info.st_mode) != 0o600:
+                    raise RuntimeError(f"Partial download must have mode 0600: {name}")
+                remaining = max(0, size - info.st_size)
+                if shutil.disk_usage(directory).free < remaining + 64 * 1024 * 1024:
+                    raise RuntimeError(f"Not enough disk space to download {target.name}; need at least {remaining / 1024**3:.2f} GiB plus 64 MiB free. Partial downloads are kept for resuming.")
+                # stdout is dup'd from our verified descriptor. Curl never opens
+                # a writable pathname, including when resuming an interrupted file.
+                part.seek(0, os.SEEK_END)
+                subprocess.run(["curl", "--fail", "--location", "--retry", "2",
+                                "--continue-at", str(info.st_size), "--output", "-", url],
+                               stdout=part, check=True)
+                part.seek(0)
+                if hashlib.file_digest(part, "sha256").hexdigest() != digest:
+                    raise RuntimeError(f"Checksum mismatch: {name}")
+                checked_download_file(part.fileno(), directory, name)
+                os.fsync(part.fileno())
+                os.replace(name, target.name, src_dir_fd=directory, dst_dir_fd=parent)
+                os.fsync(parent)
+        finally:
+            os.close(directory)
+    finally:
+        os.close(parent)
 
 
 def selected_backend(backend=None):

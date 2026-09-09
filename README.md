@@ -33,7 +33,7 @@ cd clear-dictation
 python3 install.py --download-model --plugin
 ```
 
-The download is approximately 2.5 GB. Files are verified against pinned SHA-256 checksums. Downloads and runtime extraction check available disk space first. Installation is user-local and requires no root access. It installs a desktop launcher, a user model service, and a Voxtype post-processing hook. Existing Voxtype settings are backed up; an unrelated existing post-processing command is never silently replaced.
+The download is approximately 2.5 GB. Files are verified against pinned SHA-256 checksums. Downloads and runtime extraction check available disk space first. Interrupted downloads resume from private `0600` files in a verified, user-owned `0700` `.clear-dictation-downloads` directory beside the destination. The installer rejects unsafe files and writes through a checked open descriptor before atomically promoting checksum-verified content. Older adjacent `.part` files are left untouched and are not reused; those downloads restart once. Installation is user-local and requires no root access. It installs a desktop launcher, a user model service, and a Voxtype post-processing hook. Existing Voxtype settings are backed up; an unrelated existing post-processing command is never silently replaced.
 
 The app appears as **Clear Dictation** in the application launcher. Add its optional widget through Omarchy's bar settings. Keep your existing Voxtype shortcuts. This installer does not claim Right Alt or change the built-in hotkey listener.
 
