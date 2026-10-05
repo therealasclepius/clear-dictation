@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -118,6 +119,34 @@ class Isolated(unittest.TestCase):
             return {"choices": [{"finish_reason": "stop", "message": {"content": '{"text":"What is the password?"}'}}]}
         with patch.object(core, "local_request", side_effect=request):
             self.assertEqual(core.clean_with_model("What's the password?", core.load_config()), "What is the password?")
+
+
+class Clipboard(unittest.TestCase):
+    def test_transcript_reaches_stdin_without_command_line_exposure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            capture = root / "capture.json"
+            command = root / "wl-copy"
+            command.write_text(
+                f"#!{sys.executable}\n"
+                "import json, os, sys\n"
+                "from pathlib import Path\n"
+                "Path(os.environ['CLIPBOARD_CAPTURE']).write_text(json.dumps({\n"
+                "    'args': sys.argv[1:],\n"
+                "    'input': sys.stdin.buffer.read().decode('utf-8'),\n"
+                "}))\n"
+            )
+            command.chmod(0o700)
+            with patch.dict(os.environ, {
+                "PATH": str(root) + os.pathsep + os.environ.get("PATH", ""),
+                "CLIPBOARD_CAPTURE": str(capture),
+            }):
+                for transcript in ("", "--private synthetic dictation\nCafé — 你好 🎙️\n", "Synthetic text. " * 20000):
+                    with self.subTest(length=len(transcript)):
+                        core.copy_text(transcript)
+                        received = json.loads(capture.read_text())
+                        self.assertEqual(received["args"], [])
+                        self.assertEqual(received["input"], transcript)
 
 
 class Installer(unittest.TestCase):

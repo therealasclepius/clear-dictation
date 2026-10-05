@@ -247,4 +247,5 @@ def process(text):
 
 
 def copy_text(text):
-    subprocess.run(["wl-copy", "--", text], check=True, timeout=2)
+    # Keep private transcripts out of process command lines.
+    subprocess.run(["wl-copy"], input=text.encode("utf-8"), check=True, timeout=2)
