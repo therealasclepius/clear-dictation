@@ -17,6 +17,8 @@ import tarfile
 import tempfile
 import tomllib
 
+from cleardictation.core import check_model_directory
+
 ROOT = Path(__file__).resolve().parent
 HOME = Path.home()
 DATA = HOME / ".local/share/clear-dictation"
@@ -197,6 +199,9 @@ def install(plugin=False, backend=None):
     config = HOME / ".config/voxtype/config.toml"
     original = config.read_text() if config.exists() else ""
     patched = patch_voxtype(original, launcher)
+    key = HOME / ".config/clear-dictation/model.key"
+    key.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    check_model_directory(key.parent)
     DATA.mkdir(parents=True, exist_ok=True)
     install_state_path = DATA / "install-state.json"
     if install_state_path.exists():
@@ -227,15 +232,12 @@ StartupWMClass=local.cleardictation.App
 """)
     # A wrapper keeps shell escaping separate from systemd's percent expansion.
     runner = DATA / "run-model"
-    key = HOME / ".config/clear-dictation/model.key"
-    key.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    key.parent.chmod(0o700)
     if not key.exists():
         fd = os.open(key, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         with os.fdopen(fd, "w") as out:
             out.write(secrets.token_urlsafe(32) + "\n")
     key.chmod(0o600)
-    write(runner, "#!/bin/sh\nexec " + " ".join(shlex.quote(str(x)) for x in [server, "--model", model, "--host", "127.0.0.1", "--port", "18089", "--api-key-file", key, "--cors-origins", "http://127.0.0.1:18089", "--ctx-size", "3072", "--parallel", "1", "--threads", "4", "--threads-batch", "4", "--no-webui", "--jinja", "--chat-template-kwargs", '{"enable_thinking":false}', "--sleep-idle-seconds", "-1"]) + "\n", True)
+    write(runner, "#!/bin/sh\numask 077\nexec " + " ".join(shlex.quote(str(x)) for x in [server, "--model", model, "--host", key.parent / "model.sock", "--api-key-file", key, "--cors-origins", "http://localhost", "--ctx-size", "3072", "--parallel", "1", "--threads", "4", "--threads-batch", "4", "--no-webui", "--jinja", "--chat-template-kwargs", '{"enable_thinking":false}', "--sleep-idle-seconds", "-1"]) + "\n", True)
     service = HOME / ".config/systemd/user/clear-dictation-model.service"
     write(service, f"""[Unit]
 Description=Clear Dictation local text cleanup model
@@ -243,6 +245,7 @@ PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
+ExecStartPre=\"{str(launcher).replace('%', '%%')}\" prepare-model
 ExecStart=\"{str(runner).replace('%', '%%')}\"
 ExecStartPost=-\"{str(launcher).replace('%', '%%')}\" warmup
 TimeoutStartSec=60

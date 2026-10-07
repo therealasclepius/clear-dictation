@@ -12,6 +12,7 @@ def main():
     sub.add_parser("ui", help="Open the desktop control panel")
     sub.add_parser("status", help="Show settings and local model availability")
     sub.add_parser("warmup", help="Prime the local model without saving a transcript")
+    sub.add_parser("prepare-model", help="Check the service socket before model startup")
     mode = sub.add_parser("mode", help="Choose a writing mode")
     mode.add_argument("name", choices=core.MODES)
     history = sub.add_parser("history", help="List recent local transcripts")
@@ -27,6 +28,8 @@ def main():
         except Exception:
             output = text
         sys.stdout.write(output)
+    elif args.command == "prepare-model":
+        core.prepare_model_socket()
     elif args.command == "warmup":
         try:
             core.warmup()

@@ -65,7 +65,7 @@ The model stays loaded between dictations. At service startup, a synthetic reque
 
 ## Privacy and limitations
 
-Audio stays with your local Voxtype engine. This app sends only text to a loopback-only model server protected by a private local token, follows no redirects, disables HTTP proxies, and has no cloud mode or telemetry. It does not inspect your screen or other applications. Model tools, file access, and shell execution are not enabled.
+Audio stays with your local Voxtype engine. This app sends only text to the model through `~/.config/clear-dictation/model.sock`, a Unix socket in a user-owned `0700` directory. Before sending any request or reading the private API token, the client checks the connected listener's Linux `SO_PEERCRED` user ID against its own. The service also requires the private token. There is no TCP fallback, proxy routing, redirect following, cloud mode, or telemetry. Another local account cannot impersonate the model by occupying the former loopback port. Processes running as your own user and root remain within the trust boundary. The app does not inspect your screen or other applications. Model tools, file access, and shell execution are not enabled.
 
 History is saved in `~/.local/state/clear-dictation/history.sqlite3` with private filesystem permissions. Clear it from the app. No audio is stored by this app. AI cleanup can still change meaning or make mistakes; use Literal for exact text and Copy original to recover the transcription. JSON validation and length limits are checks, not a guarantee of semantic fidelity. No context-aware app formatting or automatically learned vocabulary is implemented yet.
 
@@ -79,6 +79,8 @@ History is saved in `~/.local/state/clear-dictation/history.sqlite3` with privat
 - Plugin: `~/.config/omarchy/plugins/kosta.clear-dictation/`
 
 Rerun the installer after updating source. Settings, dictionary, and history live outside the app code and are preserved. The app works independently of the optional bar plugin.
+
+When upgrading from the TCP transport, run `python3 install.py` to replace both the client and service together; existing model downloads are reused. Saved settings with the former default `http://127.0.0.1:18089/v1/chat/completions` are interpreted as the new private socket endpoint. Custom TCP endpoints are no longer supported. Updating just the app without reinstalling the service safely falls back to original text until the service is upgraded. If the private config directory has unsafe ownership, permissions, or is a symlink, installation and cleanup refuse to use it.
 
 ## Uninstall
 

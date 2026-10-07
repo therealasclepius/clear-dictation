@@ -1,22 +1,27 @@
 from __future__ import annotations
 
 import json
+import http.client
 import os
 from contextlib import contextmanager
 from pathlib import Path
 import re
 import sqlite3
+import socket
+import stat
+import struct
 import subprocess
 import tempfile
 import time
-import urllib.request
 from urllib.parse import urlsplit
 
 MODES = ("natural", "polished", "literal")
+MODEL_ENDPOINT = "http+unix://clear-dictation/v1/chat/completions"
+LEGACY_ENDPOINT = "http://127.0.0.1:18089/v1/chat/completions"
 DEFAULTS = {
     "mode": "natural",
     "enabled": True,
-    "endpoint": "http://127.0.0.1:18089/v1/chat/completions",
+    "endpoint": MODEL_ENDPOINT,
     "timeout_seconds": 18,
     "history_limit": 100,
     "dictionary": {},
@@ -42,6 +47,9 @@ def load_config():
     path = config_path()
     if path.exists():
         result.update(json.loads(path.read_text()))
+    # Upgrade saved defaults without ever contacting the old TCP listener.
+    if result["endpoint"] == LEGACY_ENDPOINT:
+        result["endpoint"] = MODEL_ENDPOINT
     if result["mode"] not in MODES:
         raise ValueError("Unknown writing mode")
     if not isinstance(result["dictionary"], dict):
@@ -126,24 +134,82 @@ def apply_dictionary(text, dictionary):
     return re.sub(pattern, lambda match: lookup[match.group().casefold()], text, flags=re.IGNORECASE)
 
 
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):
-        raise ValueError("Local cleanup does not follow redirects")
+def check_model_directory(directory):
+    info = directory.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) != 0o700):
+        raise ValueError("Model directory must be user-owned, not a symlink, and mode 0700")
+
+
+def prepare_model_socket():
+    """Remove only a stale, user-owned socket before the service starts."""
+    directory = config_path().parent
+    check_model_directory(directory)
+    path = directory / "model.sock"
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return
+    if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
+        raise ValueError("Refusing to replace an unsafe model socket")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+        probe.settimeout(1)
+        try:
+            probe.connect(str(path))
+        except ConnectionRefusedError:
+            current = path.lstat()
+            if (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
+                raise ValueError("Model socket changed during startup")
+            path.unlink()
+        else:
+            raise ValueError("Local model socket is already in use")
+
+
+class ModelConnection(http.client.HTTPConnection):
+    """HTTP over a private Unix socket; authenticate this connection before send."""
+
+    def connect(self):
+        directory = config_path().parent
+        check_model_directory(directory)
+        peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            peer.settimeout(self.timeout)
+            peer.connect(str(directory / "model.sock"))
+            # Kernel credentials describe the actual connected listener, avoiding
+            # the race in checking a port or pathname before a separate request.
+            credentials = peer.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+            _pid, uid, _gid = struct.unpack("3i", credentials)
+            if uid != os.getuid():
+                raise ValueError("Local model belongs to a different user")
+        except BaseException:
+            peer.close()
+            raise
+        self.sock = peer
 
 
 def local_request(endpoint, payload=None, timeout=1):
     parsed = urlsplit(endpoint)
-    if parsed.scheme != "http" or parsed.hostname not in ("127.0.0.1", "::1", "localhost") or parsed.username or parsed.password:
-        raise ValueError("This version only sends text to a local model")
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-    body = json.dumps(payload).encode() if payload is not None else None
-    headers = {"Content-Type": "application/json"}
-    key_path = config_path().parent / "model.key"
-    if key_path.exists():
-        headers["Authorization"] = "Bearer " + key_path.read_text().strip()
-    request = urllib.request.Request(endpoint, data=body, headers=headers)
-    with opener.open(request, timeout=timeout) as response:
-        data = response.read(1024 * 1024 + 1)
+    if endpoint not in (MODEL_ENDPOINT, "http+unix://clear-dictation/health"):
+        raise ValueError("Cleanup requires the private local model socket; rerun the installer")
+    connection = ModelConnection("localhost", timeout=timeout)
+    try:
+        connection.connect()
+        # Do not even read the token until the listener is authenticated.
+        key = (config_path().parent / "model.key").read_text().strip()
+        if not key:
+            raise ValueError("Local model token is missing")
+        body = json.dumps(payload).encode() if payload is not None else None
+        headers = {"Content-Type": "application/json", "Authorization": "Bearer " + key}
+        connection.request("POST" if body is not None else "GET", parsed.path, body, headers)
+        with connection.getresponse() as response:
+            # HTTPConnection has no proxy support or automatic redirects.
+            if 300 <= response.status < 400:
+                raise ValueError("Local cleanup does not follow redirects")
+            if response.status != 200:
+                raise ValueError("Local model request failed")
+            data = response.read(1024 * 1024 + 1)
+    finally:
+        connection.close()
     if len(data) > 1024 * 1024:
         raise ValueError("Model response exceeded the size limit")
     return json.loads(data)
