@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 from pathlib import Path
 import sys
 import tempfile
@@ -95,7 +96,7 @@ class Isolated(unittest.TestCase):
             self.assertEqual(core.process("Keep this sentence."), "Keep this sentence.")
 
     def test_cloud_endpoint_rejected_before_network(self):
-        with patch("urllib.request.build_opener") as network:
+        with patch.object(core.socket, "socket") as network:
             with self.assertRaises(ValueError):
                 core.local_request("https://example.com/v1/chat/completions", {"text": "private"})
             network.assert_not_called()
@@ -227,6 +228,14 @@ class Installer(unittest.TestCase):
             with patch.object(install, "HOME", home), patch.object(install, "DATA", data), patch.object(install.shutil, "which", return_value="/fake/bin"), patch.object(install.subprocess, "run"):
                 install.install(plugin=True)
                 self.assertTrue((home / ".local/bin/clear-dictation").exists())
+                runner = (data / "run-model").read_text()
+                args = shlex.split(runner.split("exec ", 1)[1])
+                self.assertEqual(args[args.index("--host") + 1], str(home / ".config/clear-dictation/model.sock"))
+                self.assertNotIn("--port", args)
+                self.assertIn("umask 077", runner)
+                service = (home / ".config/systemd/user/clear-dictation-model.service").read_text()
+                self.assertIn(f'ExecStartPre="{home}/.local/bin/clear-dictation" prepare-model', service)
+                self.assertEqual((home / ".config/clear-dictation").stat().st_mode & 0o777, 0o700)
                 cfg.write_text(cfg.read_text().replace('engine="parakeet"', 'engine="whisper"'))
                 install.install(plugin=True)
                 self.assertEqual(cfg.read_text().count("[output.post_process]"), 1)
